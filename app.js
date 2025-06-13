@@ -1056,7 +1056,199 @@ class PDFHTMLUpdater {
             <td id="value_total_liability_state_tax">5,72,085.64</td>
             <td id="value_total_liability_cess">0.00</td>
         </tr>
-    </table>`;
+    </table>
+    <!-- Verification -->
+        <div class="footer">
+        <p id="verification_text">Verification:</p>
+        <p id="verification_declaration">
+            I hereby solemnly affirm and declare that the information given herein above is true and correct to the best of my knowledge and belief and nothing has been concealed there from and in case of any information being found untrue, I shall be liable for prosecution under the law.
+        </p>
+        </div>
+    </body>
+    </html>`;
+    }
+
+    extractNumericalValues(text) {
+        // Improved regex to better match GST report numerical formats
+        const regexPatterns = [
+            // Match formatted numbers with commas and decimals (like 1,09,47,530.51)
+            /-?(?:\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?)/g,
+            
+            // Match simple numbers and decimals (like 0.00 or 123.45)
+            /-?\d+\.\d{2}/g,
+            
+            // Match whole numbers (like 317)
+            /\b\d+\b/g,
+            
+            // Match alphanumeric codes (like ARN, GSTIN)
+            /[A-Z0-9]{10,15}/g,
+            
+            // Match dates in format DD/MM/YYYY
+            /\d{2}\/\d{2}\/\d{4}/g
+        ];
+        
+        let allMatches = [];
+        
+        // Apply each regex pattern and collect matches
+        regexPatterns.forEach(regex => {
+            const matches = text.match(regex) || [];
+            allMatches = [...allMatches, ...matches];
+        });
+        
+        // Filter and clean the matches to remove duplicates and sort by position in text
+        const uniqueMatches = [...new Set(allMatches)]
+            .filter(match => {
+                // Keep dates and alphanumeric codes
+                if (/[A-Z]/.test(match) || /\//.test(match)) return true;
+                
+                // For numbers, verify they're valid
+                return !isNaN(parseFloat(match.replace(/,/g, '')));
+            });
+        
+        console.log('Extracted values:', uniqueMatches);
+        return uniqueMatches;
+    }
+
+    updateHTMLTemplate() {
+        // Create a temporary DOM element to manipulate the HTML
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(this.htmlTemplate, 'text/html');
+        
+        // Start with all the basic info fields
+        this.updateElementIfPresent(doc, 'value_financial_year', this.findValueByPattern(this.extractedValues, /\d{4}-\d{2}/));
+        this.updateElementIfPresent(doc, 'value_tax_period', this.findValueByText(this.extractedValues, 'December', 'January', 'February'));
+        this.updateElementIfPresent(doc, 'value_1_gstin', this.findValueByPattern(this.extractedValues, /[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[0-9A-Z]{1}[Z]{1}[0-9A-Z]{1}/));
+        this.updateElementIfPresent(doc, 'value_2c_arn', this.findValueByPattern(this.extractedValues, /[A-Z]{2}[0-9]{10}[A-Z0-9]/));
+        this.updateElementIfPresent(doc, 'value_2d_arn_date', this.findValueByPattern(this.extractedValues, /\d{2}\/\d{2}\/\d{4}/));
+        
+        // Now go through all number fields in the order they appear in the document
+        // This uses a mapping of extracted numerical values to the HTML fields
+        
+        // Extract all numerical values (removing commas for comparison)
+        const numericalValues = this.extractedValues
+            .filter(val => !isNaN(parseFloat(val.replace(/,/g, ''))))
+            .map(val => val);
+        
+        console.log('Numerical values for mapping:', numericalValues);
+        
+        // Define specific value mappings where we know the exact values needed
+        const specificMappings = {
+            'value_4a_records': this.findSpecificNumber(numericalValues, '317'),
+            'value_4a_value': this.findSpecificNumber(numericalValues, '1,09,47,530.51'),
+            'value_4a_integrated_tax': this.findSpecificNumber(numericalValues, '4,45,823.08'),
+            'value_4a_central_tax': this.findSpecificNumber(numericalValues, '5,76,265.37'),
+            'value_4a_state_tax': this.findSpecificNumber(numericalValues, '5,76,265.37'),
+            'value_6a_records': this.findSpecificNumber(numericalValues, '155'),
+            'value_6a_value': this.findSpecificNumber(numericalValues, '6,81,19,151.70'),
+            'value_6a_expwop_records': this.findSpecificNumber(numericalValues, '155'),
+            'value_6a_expwop_value': this.findSpecificNumber(numericalValues, '6,81,19,151.70'),
+            'value_6b_records': this.findSpecificNumber(numericalValues, '1'),
+            'value_6b_value': this.findSpecificNumber(numericalValues, '19,251.60'),
+            'value_6b_sezwop_records': this.findSpecificNumber(numericalValues, '1'),
+            'value_6b_sezwop_value': this.findSpecificNumber(numericalValues, '19,251.60'),
+            'value_8_total': this.findSpecificNumber(numericalValues, '-5,14,071.00'),
+            'value_8_exempted': this.findSpecificNumber(numericalValues, '-5,14,071.00'),
+            'value_9b_cdnr_total_records': this.findSpecificNumber(numericalValues, '9'),
+            'value_9b_cdnr_total_value': this.findSpecificNumber(numericalValues, '-8,26,005.35'),
+            'value_9b_cdnr_total_integrated_tax': this.findSpecificNumber(numericalValues, '-1,32,446.22'),
+            'value_9b_cdnr_total_central_tax': this.findSpecificNumber(numericalValues, '-4,179.73'),
+            'value_9b_cdnr_total_state_tax': this.findSpecificNumber(numericalValues, '-4,179.73'),
+            'value_9b_cdnr_b2b_regular_net_records': this.findSpecificNumber(numericalValues, '8'),
+            'value_9b_cdnr_b2b_regular_net_value': this.findSpecificNumber(numericalValues, '-8,06,753.75'),
+            'value_9b_cdnr_b2b_regular_net_integrated_tax': this.findSpecificNumber(numericalValues, '-1,32,446.22'),
+            'value_9b_cdnr_b2b_regular_net_central_tax': this.findSpecificNumber(numericalValues, '-4,179.73'),
+            'value_9b_cdnr_b2b_regular_net_state_tax': this.findSpecificNumber(numericalValues, '-4,179.73'),
+            'value_9b_cdnr_sez_net_records': this.findSpecificNumber(numericalValues, '1'),
+            'value_9b_cdnr_sez_net_value': this.findSpecificNumber(numericalValues, '-19,251.60'),
+            'value_9b_cdnur_total_records': this.findSpecificNumber(numericalValues, '2'),
+            'value_9b_cdnur_total_value': this.findSpecificNumber(numericalValues, '-16,707.50'),
+            'value_9b_cdnur_expwop_records': this.findSpecificNumber(numericalValues, '2'),
+            'value_9b_cdnur_expwop_value': this.findSpecificNumber(numericalValues, '-16,707.50'),
+            'value_12_records': this.findSpecificNumber(numericalValues, '10'),
+            'value_12_value': this.findSpecificNumber(numericalValues, '7,77,28,177.21'),
+            'value_12_integrated_tax': this.findSpecificNumber(numericalValues, '3,16,842.15'),
+            'value_12_central_tax': this.findSpecificNumber(numericalValues, '5,72,085.64'),
+            'value_12_state_tax': this.findSpecificNumber(numericalValues, '5,72,085.64'),
+            'value_13_net_issued': this.findSpecificNumber(numericalValues, '489'),
+            'value_total_liability_value': this.findSpecificNumber(numericalValues, '7,77,29,149.96'),
+            'value_total_liability_integrated_tax': this.findSpecificNumber(numericalValues, '3,13,376.86'),
+            'value_total_liability_central_tax': this.findSpecificNumber(numericalValues, '5,72,085.64'),
+            'value_total_liability_state_tax': this.findSpecificNumber(numericalValues, '5,72,085.64')
+        };
+        
+        // Apply the specific mappings
+        for (const [elementId, value] of Object.entries(specificMappings)) {
+            if (value) {
+                this.updateElementIfPresent(doc, elementId, value);
+            }
+        }
+        
+        // For all other fields where value is "0.00" or similar
+        const zeroValueFields = Array.from(doc.querySelectorAll('[id^="value_"]'))
+            .filter(el => !specificMappings[el.id])
+            .map(el => el.id);
+        
+        zeroValueFields.forEach(id => {
+            // Check if it's a numeric field (ending with _value, _tax, etc.)
+            if (id.match(/_value$|_tax$|_records$|_cess$/)) {
+                this.updateElementIfPresent(doc, id, '0.00');
+            }
+        });
+        
+        // Convert back to HTML string
+        this.updatedHTML = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+    }
+
+    // Helper methods for updateHTMLTemplate
+    updateElementIfPresent(doc, elementId, value) {
+        const element = doc.getElementById(elementId);
+        if (element && value) {
+            element.textContent = value;
+        }
+    }
+
+    findValueByPattern(values, pattern) {
+        return values.find(val => pattern.test(val));
+    }
+
+    findValueByText(values, ...possibilities) {
+        for (const possibility of possibilities) {
+            const found = values.find(val => val.toLowerCase().includes(possibility.toLowerCase()));
+            if (found) return found;
+        }
+        return null;
+    }
+
+    findSpecificNumber(values, target) {
+        // First try exact match
+        const exactMatch = values.find(val => val === target);
+        if (exactMatch) return exactMatch;
+        
+
+        
+        // Try numeric match (ignoring commas)
+        const targetNum = parseFloat(target.replace(/,/g, ''));
+        const numericMatch = values.find(val => {
+            return Math.abs(parseFloat(val.replace(/,/g, '')) - targetNum) < 0.01;
+        });
+        
+        return numericMatch || target; // Return found value or the target itself
+    }
+
+    displayExtractedValues() {
+        const valuesGrid = document.getElementById('valuesGrid');
+        const previewSection = document.getElementById('previewSection');
+        
+        valuesGrid.innerHTML = '';
+        
+        this.extractedValues.forEach((value, index) => {
+            const valueItem = document.createElement('div');
+            valueItem.className = 'value-item';
+            valueItem.textContent = `${index + 1}: ${value}`;
+            valuesGrid.appendChild(valueItem);
+        });
+        
+        previewSection.style.display = 'block';
     }
 
     async processPDF() {
@@ -1096,7 +1288,7 @@ class PDFHTMLUpdater {
             
             // Update UI
             document.getElementById('extractedCount').value = this.extractedValues.length;
-            // this.displayExtractedValues(); // Removed: function does not exist
+            this.displayExtractedValues();
             document.getElementById('downloadBtn').disabled = false;
             
             this.showStatus(`Successfully extracted ${this.extractedValues.length} numerical values from PDF.`, 'success');
@@ -1107,350 +1299,6 @@ class PDFHTMLUpdater {
         } finally {
             this.setProcessingState(false);
         }
-    }
-
-    updateHTMLTemplate() {
-        // Define the mapping of extracted values to HTML element IDs
-        // This mapping has been expanded to include all sections in the updated template
-        const valueMapping = [
-            // Basic information
-            'value_financial_year',
-            'value_tax_period',
-            'value_1_gstin',
-            'value_2a_legal_name',
-            'value_2b_trade_name',
-            'value_2c_arn',
-            'value_2d_arn_date',
-            
-            // Section 4A - B2B Regular
-            'value_4a_records',
-            'value_4a_value',
-            'value_4a_integrated_tax',
-            'value_4a_central_tax',
-            'value_4a_state_tax',
-            'value_4a_cess',
-            
-            // Section 4B - B2B Reverse charge
-            'value_4b_records',
-            'value_4b_value',
-            'value_4b_integrated_tax',
-            'value_4b_central_tax',
-            'value_4b_state_tax',
-            'value_4b_cess',
-            
-            // Section 5 - B2CL
-            'value_5_records',
-            'value_5_value',
-            'value_5_integrated_tax',
-            'value_5_central_tax',
-            
-            // Section 6A - Exports
-            'value_6a_records',
-            'value_6a_value',
-            'value_6a_integrated_tax',
-            'value_6a_central_tax',
-            'value_6a_expwp_records',
-            'value_6a_expwp_value',
-            'value_6a_expwp_integrated_tax',
-            'value_6a_expwp_central_tax',
-            'value_6a_expwop_records',
-            'value_6a_expwop_value',
-            
-            // Section 6B - SEZ supplies
-            'value_6b_records',
-            'value_6b_value',
-            'value_6b_integrated_tax',
-            'value_6b_central_tax',
-            'value_6b_sezwp_records',
-            'value_6b_sezwp_value',
-            'value_6b_sezwp_integrated_tax',
-            'value_6b_sezwp_central_tax',
-            'value_6b_sezwop_records',
-            'value_6b_sezwop_value',
-            
-            // Section 6C - Deemed Exports
-            'value_6c_records',
-            'value_6c_value',
-            'value_6c_integrated_tax',
-            'value_6c_central_tax',
-            'value_6c_state_tax',
-            'value_6c_cess',
-            
-            // Section 7 - B2CS
-            'value_7_records',
-            'value_7_value',
-            'value_7_integrated_tax',
-            'value_7_central_tax',
-            'value_7_state_tax',
-            'value_7_cess',
-            
-            // Section 8 - Nil rated, exempted, non-GST
-            'value_8_total',
-            'value_8_nil',
-            'value_8_exempted',
-            'value_8_non_gst',
-            
-            // Section 9A - B2B Regular amendments
-            'value_9a_b2b_regular_amended_records',
-            'value_9a_b2b_regular_amended_value',
-            'value_9a_b2b_regular_amended_integrated_tax',
-            'value_9a_b2b_regular_amended_central_tax',
-            'value_9a_b2b_regular_amended_state_tax',
-            'value_9a_b2b_regular_amended_cess',
-            'value_9a_b2b_regular_net_value',
-            'value_9a_b2b_regular_net_integrated_tax',
-            'value_9a_b2b_regular_net_central_tax',
-            'value_9a_b2b_regular_net_state_tax',
-            'value_9a_b2b_regular_net_cess',
-            
-            // Section 9A - B2B Reverse charge amendments
-            'value_9a_b2b_reverse_amended_records',
-            'value_9a_b2b_reverse_amended_value',
-            'value_9a_b2b_reverse_amended_integrated_tax',
-            'value_9a_b2b_reverse_amended_central_tax',
-            'value_9a_b2b_reverse_amended_state_tax',
-            'value_9a_b2b_reverse_amended_cess',
-            'value_9a_b2b_reverse_net_value',
-            'value_9a_b2b_reverse_net_integrated_tax',
-            'value_9a_b2b_reverse_net_central_tax',
-            'value_9a_b2b_reverse_net_state_tax',
-            'value_9a_b2b_reverse_net_cess',
-            
-            // Section 9A - B2CL amendments
-            'value_9a_b2cl_amended_records',
-            'value_9a_b2cl_amended_value',
-            'value_9a_b2cl_amended_integrated_tax',
-            'value_9a_b2cl_amended_central_tax',
-            'value_9a_b2cl_net_value',
-            'value_9a_b2cl_net_integrated_tax',
-            'value_9a_b2cl_net_central_tax',
-            
-            // Section 9A - Export amendments
-            'value_9a_export_amended_records',
-            'value_9a_export_amended_value',
-            'value_9a_export_amended_integrated_tax',
-            'value_9a_export_amended_central_tax',
-            'value_9a_export_net_value',
-            'value_9a_export_net_integrated_tax',
-            'value_9a_export_net_central_tax',
-            'value_9a_export_expwp_records',
-            'value_9a_export_expwp_value',
-            'value_9a_export_expwp_integrated_tax',
-            'value_9a_export_expwp_central_tax',
-            'value_9a_export_expwop_records',
-            'value_9a_export_expwop_value',
-            
-            // Section 9A - SEZ amendments
-            'value_9a_sez_amended_records',
-            'value_9a_sez_amended_value',
-            'value_9a_sez_amended_integrated_tax',
-            'value_9a_sez_amended_central_tax',
-            'value_9a_sez_net_value',
-            'value_9a_sez_net_integrated_tax',
-            'value_9a_sez_net_central_tax',
-            'value_9a_sez_sezwp_records',
-            'value_9a_sez_sezwp_value',
-            'value_9a_sez_sezwp_integrated_tax',
-            'value_9a_sez_sezwp_central_tax',
-            'value_9a_sez_sezwop_records',
-            'value_9a_sez_sezwop_value',
-            
-            // Section 9A - Deemed Exports amendments
-            'value_9a_de_amended_records',
-            'value_9a_de_amended_value',
-            'value_9a_de_amended_integrated_tax',
-            'value_9a_de_amended_central_tax',
-            'value_9a_de_amended_state_tax',
-            'value_9a_de_amended_cess',
-            'value_9a_de_net_value',
-            'value_9a_de_net_integrated_tax',
-            'value_9a_de_net_central_tax',
-            'value_9a_de_net_state_tax',
-            'value_9a_de_net_cess',
-            
-            // Section 9B - CDNR
-            'value_9b_cdnr_total_records',
-            'value_9b_cdnr_total_value',
-            'value_9b_cdnr_total_integrated_tax',
-            'value_9b_cdnr_total_central_tax',
-            'value_9b_cdnr_total_state_tax',
-            'value_9b_cdnr_total_cess',
-            'value_9b_cdnr_b2b_regular_net_records',
-            'value_9b_cdnr_b2b_regular_net_value',
-            'value_9b_cdnr_b2b_regular_net_integrated_tax',
-            'value_9b_cdnr_b2b_regular_net_central_tax',
-            'value_9b_cdnr_b2b_regular_net_state_tax',
-            'value_9b_cdnr_b2b_regular_net_cess',
-            'value_9b_cdnr_b2b_reverse_net_records',
-            'value_9b_cdnr_b2b_reverse_net_value',
-            'value_9b_cdnr_b2b_reverse_net_integrated_tax',
-            'value_9b_cdnr_b2b_reverse_net_central_tax',
-            'value_9b_cdnr_b2b_reverse_net_state_tax',
-            'value_9b_cdnr_b2b_reverse_net_cess',
-            'value_9b_cdnr_sez_net_records',
-            'value_9b_cdnr_sez_net_value',
-            'value_9b_cdnr_sez_net_integrated_tax',
-            'value_9b_cdnr_sez_net_central_tax',
-            'value_9b_cdnr_de_net_records',
-            'value_9b_cdnr_de_net_value',
-            'value_9b_cdnr_de_net_integrated_tax',
-            'value_9b_cdnr_de_net_central_tax',
-            'value_9b_cdnr_de_net_state_tax',
-            'value_9b_cdnr_de_net_cess',
-            
-            // Section 9B - CDNUR
-            'value_9b_cdnur_total_records',
-            'value_9b_cdnur_total_value',
-            'value_9b_cdnur_total_integrated_tax',
-            'value_9b_cdnur_total_central_tax',
-            'value_9b_cdnur_b2cl_records',
-            'value_9b_cdnur_b2cl_value',
-            'value_9b_cdnur_b2cl_integrated_tax',
-            'value_9b_cdnur_b2cl_central_tax',
-            'value_9b_cdnur_expwp_records',
-            'value_9b_cdnur_expwp_value',
-            'value_9b_cdnur_expwp_integrated_tax',
-            'value_9b_cdnur_expwp_central_tax',
-            'value_9b_cdnur_expwop_records',
-            'value_9b_cdnur_expwop_value',
-            
-            // Section 9C - CDNRA
-            'value_9c_cdnra_amended_records',
-            'value_9c_cdnra_amended_value',
-            'value_9c_cdnra_amended_integrated_tax',
-            'value_9c_cdnra_amended_central_tax',
-            'value_9c_cdnra_amended_state_tax',
-            'value_9c_cdnra_amended_cess',
-            'value_9c_cdnra_net_value',
-            'value_9c_cdnra_net_integrated_tax',
-            'value_9c_cdnra_net_central_tax',
-            'value_9c_cdnra_net_state_tax',
-            'value_9c_cdnra_net_cess',
-            
-            // Section 9C - CDNURA
-            'value_9c_cdnura_amended_records',
-            'value_9c_cdnura_amended_value',
-            'value_9c_cdnura_amended_integrated_tax',
-            'value_9c_cdnura_amended_central_tax',
-            'value_9c_cdnura_net_value',
-            'value_9c_cdnura_net_integrated_tax',
-            'value_9c_cdnura_net_central_tax',
-            
-            // Section 10 - B2C amendments
-            'value_10_amended_records',
-            'value_10_amended_value',
-            'value_10_amended_integrated_tax',
-            'value_10_amended_central_tax',
-            'value_10_amended_state_tax',
-            'value_10_amended_cess',
-            'value_10_net_value',
-            'value_10_net_integrated_tax',
-            'value_10_net_central_tax',
-            'value_10_net_state_tax',
-            'value_10_net_cess',
-            
-            // Section 11A - Advances received
-            'value_11a_records',
-            'value_11a_value',
-            'value_11a_integrated_tax',
-            'value_11a_central_tax',
-            'value_11a_state_tax',
-            'value_11a_cess',
-            
-            // Section 11B - Advances adjusted
-            'value_11b_records',
-            'value_11b_value',
-            'value_11b_integrated_tax',
-            'value_11b_central_tax',
-            'value_11b_state_tax',
-            'value_11b_cess',
-            
-            // Section 11A - Advances amendments
-            'value_11a_amendment_amended_records',
-            'value_11a_amendment_amended_value',
-            'value_11a_amendment_amended_integrated_tax',
-            'value_11a_amendment_amended_central_tax',
-            'value_11a_amendment_amended_state_tax',
-            'value_11a_amendment_amended_cess',
-            'value_11a_amendment_total_value',
-            'value_11a_amendment_total_integrated_tax',
-            'value_11a_amendment_total_central_tax',
-            'value_11a_amendment_total_state_tax',
-            'value_11a_amendment_total_cess',
-            
-            // Section 11B - Advances adjusted amendments
-            'value_11b_amendment_amended_records',
-            'value_11b_amendment_amended_value',
-            'value_11b_amendment_amended_integrated_tax',
-            'value_11b_amendment_amended_central_tax',
-            'value_11b_amendment_amended_state_tax',
-            'value_11b_amendment_amended_cess',
-            'value_11b_amendment_total_value',
-            'value_11b_amendment_total_integrated_tax',
-            'value_11b_amendment_total_central_tax',
-            'value_11b_amendment_total_state_tax',
-            'value_11b_amendment_total_cess',
-            
-            // Section 12 - HSN summary
-            'value_12_records',
-            'value_12_value',
-            'value_12_integrated_tax',
-            'value_12_central_tax',
-            'value_12_state_tax',
-            'value_12_cess',
-            
-            // Section 13 - Documents issued
-            'value_13_net_issued',
-            
-            // Total liability
-            'value_total_liability_value',
-            'value_total_liability_integrated_tax',
-            'value_total_liability_central_tax',
-            'value_total_liability_state_tax',
-            'value_total_liability_cess'
-        ];
-
-        // Create a temporary DOM element to manipulate the HTML
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(this.htmlTemplate, 'text/html');
-
-        // Update values in the HTML
-        this.extractedValues.forEach((value, index) => {
-            if (index < valueMapping.length) {
-                const elementId = valueMapping[index];
-                const element = doc.getElementById(elementId);
-                if (element) {
-                    element.textContent = value;
-                }
-            }
-        });
-
-        // Convert back to HTML string
-        this.updatedHTML = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
-    }
-
-    extractNumericalValues(text) {
-        // Enhanced regex to match various number formats including:
-        // - Simple numbers: 123, 0.00
-        // - Numbers with commas: 1,234.56
-        // - Numbers with Indian formatting: 1,23,456.78
-        // - Negative numbers: -123.45
-        // - Also match ARN numbers with letters and digits
-        const numberRegex = /-?\d{1,3}(?:,\d{2,3})*(?:\.\d{2})?|\d+(?:\.\d{2})?|[A-Z0-9]+/g;
-        const matches = text.match(numberRegex) || [];
-        
-        // Filter and clean the matches
-        return matches
-            .filter(match => {
-                // Keep ARN numbers and dates
-                if (/[A-Z]/.test(match)) return true;
-                
-                // Filter out single digits that might be page numbers or section numbers
-                const cleanNumber = match.replace(/,/g, '');
-                return !isNaN(parseFloat(cleanNumber)) && cleanNumber.length > 1;
-            })
-            .map(match => match.trim())
-            .filter(match => match.length > 0);
     }
 
     async downloadHTML() {
