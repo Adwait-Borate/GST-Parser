@@ -1,8 +1,9 @@
-// PDF to HTML Value Updater Application
+// PDF to HTML Value Updater Application - FIXED VERSION
 class PDFHTMLUpdater {
     constructor() {
         this.extractedValues = [];
         this.updatedHTML = '';
+        this.originalHTMLTemplate = ''; // Store original template
         this.htmlTemplate = '';
         this.init();
     }
@@ -55,6 +56,9 @@ class PDFHTMLUpdater {
             return;
         }
 
+        // Reset state for new file
+        this.resetState();
+
         document.getElementById('fileName').textContent = file.name;
         document.getElementById('fileInfo').style.display = 'block';
         document.getElementById('processBtn').disabled = false;
@@ -63,10 +67,27 @@ class PDFHTMLUpdater {
         this.showStatus('PDF file selected successfully. Click "Process PDF" to extract values.', 'success');
     }
 
+    // NEW METHOD: Reset state when new file is selected
+    resetState() {
+        this.extractedValues = [];
+        this.updatedHTML = '';
+        this.pdfText = '';
+        this.tableData = {};
+        
+        // Reset UI
+        document.getElementById('valuesGrid').innerHTML = '';
+        document.getElementById('previewSection').style.display = 'none';
+        document.getElementById('downloadBtn').disabled = true;
+        document.getElementById('extractedCount').value = '';
+        
+        // Clear any existing status
+        document.getElementById('status').style.display = 'none';
+    }
+
     async loadHTMLTemplate() {
         // Load the existing HTML template from the current page's template
-        // In a real scenario, you might load this from a separate file
-        this.htmlTemplate = `<!DOCTYPE html>
+        // Store both original and working copies
+        this.originalHTMLTemplate = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -1066,6 +1087,299 @@ class PDFHTMLUpdater {
         </div>
     </body>
     </html>`;
+        
+        this.htmlTemplate = this.originalHTMLTemplate;
+    }
+
+    extractNumericalValues(text) {
+        // Store the original text for context-based extraction
+        this.pdfText = text;
+        
+        // Enhanced regex patterns to match various formats in GST reports
+        const regexPatterns = [
+            // Match Indian formatted numbers with commas and decimals (like 1,09,47,530.51)
+            /-?(?:\d{1,2},)?(?:\d{1,2},)*\d{1,3}\.\d{2}/g,
+            
+            // Match simple decimal numbers (like 0.00 or 123.45)
+            /-?\d+\.\d{2}/g,
+            
+            // Match whole numbers (like 317)
+            /\b\d+\b/g,
+            
+            // Match alphanumeric codes (like ARN, GSTIN)
+            /[A-Z0-9]{10,15}/g,
+            
+            // Match dates in format DD/MM/YYYY
+            /\d{2}\/\d{2}\/\d{4}/g
+        ];
+        
+        let allMatches = [];
+        
+        // Apply each regex pattern and collect matches
+        regexPatterns.forEach(regex => {
+            const matches = text.match(regex) || [];
+            allMatches = [...allMatches, ...matches];
+        });
+        
+        // Filter duplicates and invalid values
+        const uniqueMatches = [...new Set(allMatches)]
+            .filter(match => {
+                // Keep dates and alphanumeric codes
+                if (/[A-Z]/.test(match) || /\//.test(match)) return true;
+                
+                // For numbers, verify they're valid
+                return !isNaN(parseFloat(match.replace(/,/g, '')));
+            });
+        
+        console.log('Extracted values:', uniqueMatches);
+        
+        // Extract specific table data using context
+        this.extractTableData(text);
+        
+        return uniqueMatches;
+    }
+
+    // New method to extract data from tables in context
+    extractTableData(text) {
+        this.tableData = {
+            section4A: this.extractSectionData(text, '4A', ['records', 'value', 'integrated_tax', 'central_tax', 'state_tax']),
+            section6A: this.extractSectionData(text, '6A', ['records', 'value']),
+            section6B: this.extractSectionData(text, '6B', ['records', 'value']),
+            section8: this.extractSectionData(text, '8', ['total', 'exempted']),
+            section9B: this.extractSectionData(text, '9B', ['records', 'value', 'integrated_tax', 'central_tax']),
+            section12: this.extractSectionData(text, '12', ['records', 'value', 'integrated_tax', 'central_tax', 'state_tax']),
+            totalLiability: this.extractTotalLiability(text)
+        };
+        
+        console.log('Extracted table data:', this.tableData);
+    }
+
+    // Helper to extract section-specific data
+    extractSectionData(text, sectionId, fields) {
+        const sectionData = {};
+        
+        // Find the section in text
+        const sectionRegex = new RegExp(`${sectionId}[\\s\\-]+.*?(?:\\d{1,3}(?:,\\d{2,3})*(?:\\.\\d{2})?|\\d+(?:\\.\\d{2})?)`, 'g');
+        const sectionMatches = text.match(sectionRegex) || [];
+        
+        if (sectionMatches.length) {
+            // Get section text and surrounding context (300 chars)
+            const sectionIdx = text.indexOf(sectionMatches[0]);
+            const sectionContext = text.substring(sectionIdx, sectionIdx + 1000);
+            
+            // Look for numbers after section markers
+            fields.forEach(field => {
+                const valueRegex = /-?(?:\d{1,3}(?:,\d{2,3})*(?:\.\d{2})?|\d+(?:\.\d{2})?)/g;
+                const values = [];
+                let match;
+                
+                while ((match = valueRegex.exec(sectionContext)) !== null) {
+                    if (values.length < 10) { // Limit to first 10 numbers to avoid getting too far
+                        values.push(match[0]);
+                    }
+                }
+                
+                if (values.length) {
+                    // For specific fields, assign appropriate values
+                    if (field === 'records') {
+                        sectionData[field] = values.find(v => !v.includes('.')) || '0';
+                    } else if (field === 'value') {
+                        // Get largest value (typically the total value)
+                        sectionData[field] = values.sort((a, b) => {
+                            return parseFloat(b.replace(/,/g, '')) - parseFloat(a.replace(/,/g, ''));
+                        })[0] || '0.00';
+                    } else {
+                        // For tax fields, use values in appropriate positions
+                        const pos = fields.indexOf(field);
+                        if (pos < values.length) {
+                            sectionData[field] = values[pos + 1] || '0.00';
+                        }
+                    }
+                }
+            });
+        }
+        
+        return sectionData;
+    }
+
+    extractTotalLiability(text) {
+        const totalLiabilityData = {};
+        
+        // Look for "Total Liability" section
+        const liabilityRegex = /Total\s+Liability.*?(?:\d{1,3}(?:,\d{2,3})*(?:\.\d{2})?)/i;
+        const liabilityMatch = text.match(liabilityRegex);
+        
+        if (liabilityMatch) {
+            const liabilityIdx = text.indexOf(liabilityMatch[0]);
+            const liabilityContext = text.substring(liabilityIdx, liabilityIdx + 500);
+            
+            // Extract values
+            const valueRegex = /-?(?:\d{1,3}(?:,\d{2,3})*(?:\.\d{2})?|\d+(?:\.\d{2})?)/g;
+            const values = [];
+            let match;
+            
+            while ((match = valueRegex.exec(liabilityContext)) !== null) {
+                if (values.length < 5) { // We need up to 5 values
+                    values.push(match[0]);
+                }
+            }
+            
+            if (values.length >= 4) {
+                totalLiabilityData.value = values[0] || '0.00';
+                totalLiabilityData.integrated_tax = values[1] || '0.00';
+                totalLiabilityData.central_tax = values[2] || '0.00';
+                totalLiabilityData.state_tax = values[3] || '0.00';
+            }
+        }
+        
+        return totalLiabilityData;
+    }
+
+    updateHTMLTemplate() {
+        // FIXED: Always start with original template, not the modified one
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(this.originalHTMLTemplate, 'text/html');
+        
+        // Update basic info fields
+        this.updateBasicInfo(doc);
+        
+        // Update section data from extracted table data
+        this.updateSection(doc, '4a', this.tableData.section4A);
+        this.updateSection(doc, '6a', this.tableData.section6A);
+        this.updateSection(doc, '6b', this.tableData.section6B);
+        this.updateSection(doc, '8', this.tableData.section8);
+        this.updateSection(doc, '9b_cdnr', this.tableData.section9B);
+        this.updateSection(doc, '12', this.tableData.section12);
+        
+        // Update total liability
+        this.updateTotalLiability(doc);
+        
+        // Set default values for remaining fields
+        this.setDefaultValues(doc);
+        
+        // Convert back to HTML string
+        this.updatedHTML = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+    }
+
+    updateBasicInfo(doc) {
+        // Look for financial year (YYYY-YY format)
+        const fyMatch = this.pdfText.match(/\b(20\d{2}-\d{2})\b/);
+        if (fyMatch) {
+            this.updateElementIfPresent(doc, 'value_financial_year', fyMatch[1]);
+        }
+        
+        // Look for tax period (month names)
+        const months = ['January', 'February', 'March', 'April', 'May', 'June', 
+                        'July', 'August', 'September', 'October', 'November', 'December'];
+        for (const month of months) {
+            if (this.pdfText.includes(month)) {
+                this.updateElementIfPresent(doc, 'value_tax_period', month);
+                break;
+            }
+        }
+        
+        // Look for GSTIN (standard format)
+        const gstinMatch = this.pdfText.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z]\d[Z][A-Z\d]\b/);
+        if (gstinMatch) {
+            this.updateElementIfPresent(doc, 'value_1_gstin', gstinMatch[0]);
+        }
+        
+        // Look for business name (typically in all caps after GSTIN)
+        const nameMatch = this.pdfText.match(/\b[A-Z\s]{5,50}\b(?=\s*LIMITED|\s*PVT|\s*LTD)/);
+        if (nameMatch) {
+            this.updateElementIfPresent(doc, 'value_2a_legal_name', nameMatch[0].trim());
+            this.updateElementIfPresent(doc, 'value_2b_trade_name', nameMatch[0].trim());
+        }
+        
+        // Look for ARN (format like AB271222083451F)
+        const arnMatch = this.pdfText.match(/\b[A-Z]{2}\d{10}[A-Z0-9]\b/);
+        if (arnMatch) {
+            this.updateElementIfPresent(doc, 'value_2c_arn', arnMatch[0]);
+        }
+        
+        // Look for date in DD/MM/YYYY format
+        const dateMatch = this.pdfText.match(/\b\d{2}\/\d{2}\/\d{4}\b/);
+        if (dateMatch) {
+            this.updateElementIfPresent(doc, 'value_2d_arn_date', dateMatch[0]);
+        }
+    }
+
+    updateSection(doc, sectionId, sectionData) {
+        if (!sectionData) return;
+        
+        // Update each field in the section
+        for (const [field, value] of Object.entries(sectionData)) {
+            const elementId = `value_${sectionId}_${field}`;
+            this.updateElementIfPresent(doc, elementId, value);
+            
+            // For sections with subfields (like expwop, sezwop)
+            if (field === 'records' || field === 'value') {
+                if (sectionId === '6a') {
+                    this.updateElementIfPresent(doc, `value_${sectionId}_expwop_${field}`, value);
+                } else if (sectionId === '6b') {
+                    this.updateElementIfPresent(doc, `value_${sectionId}_sezwop_${field}`, value);
+                }
+            }
+        }
+    }
+
+    updateTotalLiability(doc) {
+        const liabilityData = this.tableData.totalLiability;
+        if (!liabilityData) return;
+        
+        for (const [field, value] of Object.entries(liabilityData)) {
+            this.updateElementIfPresent(doc, `value_total_liability_${field}`, value);
+        }
+    }
+
+    setDefaultValues(doc) {
+        // Set default values (0 or 0.00) for unset numeric fields
+        Array.from(doc.querySelectorAll('[id^="value_"]')).forEach(element => {
+            // FIXED: Check if element is actually empty or has placeholder content
+            if (!element.textContent.trim() || 
+                element.textContent === '{{placeholder}}' || 
+                element.textContent === element.getAttribute('data-placeholder')) {
+                
+                const id = element.id;
+                
+                // Check if it's a numeric field
+                if (id.includes('_value') || id.includes('_tax') || 
+                    id.includes('_records') || id.includes('_cess')) {
+                    
+                    // Set appropriate default based on field type
+                    if (id.includes('_records')) {
+                        element.textContent = '0';
+                    } else {
+                        element.textContent = '0.00';
+                    }
+                }
+            }
+        });
+    }
+
+    // Helper methods for updateHTMLTemplate
+    updateElementIfPresent(doc, elementId, value) {
+        const element = doc.getElementById(elementId);
+        if (element && value !== undefined && value !== null && value !== '') {
+            element.textContent = value;
+            console.log(`Updated ${elementId} with value: ${value}`); // Debug log
+        }
+    }
+
+    displayExtractedValues() {
+        const valuesGrid = document.getElementById('valuesGrid');
+        const previewSection = document.getElementById('previewSection');
+        
+        valuesGrid.innerHTML = '';
+        
+        this.extractedValues.forEach((value, index) => {
+            const valueItem = document.createElement('div');
+            valueItem.className = 'value-item';
+            valueItem.textContent = `${index + 1}: ${value}`;
+            valuesGrid.appendChild(valueItem);
+        });
+        
+        previewSection.style.display = 'block';
     }
 
     async processPDF() {
@@ -1083,389 +1397,42 @@ class PDFHTMLUpdater {
             
             let allText = '';
             
-            // Extract text from all pages with better positioning information
+            // Extract text from all pages
             for (let i = 1; i <= pdf.numPages; i++) {
                 const page = await pdf.getPage(i);
                 const textContent = await page.getTextContent();
-                
-                // Sort items by their vertical position (y coordinate)
-                // This helps maintain reading order
-                const sortedItems = textContent.items.sort((a, b) => {
-                    const yDiff = b.transform[5] - a.transform[5]; // y-coordinate comparison (top to bottom)
-                    if (Math.abs(yDiff) > 5) return yDiff; // If items are on different lines
-                    return a.transform[4] - b.transform[4]; // x-coordinate comparison (left to right)
-                });
-                
-                // Join all text items with spaces
-                const pageText = sortedItems.map(item => item.str).join(' ');
-                allText += pageText + '\n\n'; // Add line breaks between pages
+                const pageText = textContent.items.map(item => item.str).join(' ');
+                allText += pageText + ' ';
             }
 
-        console.log('Extracted text from PDF:', allText);
+            console.log('Extracted PDF text:', allText.substring(0, 500) + '...'); // Debug log
 
-        // Extract numerical values using regex
-        this.extractedValues = this.extractNumericalValues(allText);
-        
-        if (this.extractedValues.length === 0) {
-            this.showStatus('No numerical values found in the PDF.', 'error');
-            this.setProcessingState(false);
-            return;
-        }
-
-        // Update the HTML template with extracted values
-        this.updateHTMLTemplate();
-        
-        // Update UI
-        document.getElementById('extractedCount').value = this.extractedValues.length;
-        this.displayExtractedValues();
-        document.getElementById('downloadBtn').disabled = false;
-        
-        this.showStatus(`Successfully extracted ${this.extractedValues.length} numerical values from PDF.`, 'success');
-        
-    } catch (error) {
-        console.error('Error processing PDF:', error);
-        this.showStatus('Error processing PDF: ' + error.message, 'error');
-    } finally {
-        this.setProcessingState(false);
-    }
-}
-
-extractNumericalValues(text) {
-    // Improved multi-stage extraction process
-    
-    // First, identify key sections in the text
-    const sections = this.identifySections(text);
-    
-    // A collection to store all our found values with context
-    let extractedValues = [];
-    
-    // Patterns for different types of values
-    const patterns = [
-        // Common financial amounts with commas and decimals
-        { 
-            regex: /-?(?:[\d,]+\.\d{2})/g,
-            type: 'amount'
-        },
-        // Whole numbers (records counts)
-        {
-            regex: /\b\d{1,4}\b(?!\.\d)/g,
-            type: 'count'
-        },
-        // GSTINs
-        {
-            regex: /[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[0-9A-Z]{1}[Z]{1}[0-9A-Z]{1}/g,
-            type: 'gstin'
-        },
-        // ARNs
-        {
-            regex: /[A-Z]{2}[0-9]{10}[A-Z0-9]/g,
-            type: 'arn'
-        },
-        // Dates
-        {
-            regex: /\d{2}\/\d{2}\/\d{4}/g,
-            type: 'date'
-        },
-        // Year ranges (like 2022-23)
-        {
-            regex: /\d{4}-\d{2}/g,
-            type: 'year'
-        }
-    ];
-
-    // Process each section to extract values
-    for (const [sectionName, sectionText] of Object.entries(sections)) {
-        // Apply each regex pattern to the section
-        for (const pattern of patterns) {
-            const matches = [...sectionText.matchAll(pattern.regex)];
+            // Extract numerical values using enhanced regex
+            this.extractedValues = this.extractNumericalValues(allText);
             
-            for (const match of matches) {
-                extractedValues.push({
-                    value: match[0],
-                    type: pattern.type,
-                    section: sectionName,
-                    context: this.getTextContext(sectionText, match.index)
-                });
+            if (this.extractedValues.length === 0) {
+                this.showStatus('No numerical values found in the PDF.', 'error');
+                this.setProcessingState(false);
+                return;
             }
+
+            // Update the HTML template with extracted values
+            this.updateHTMLTemplate();
+            
+            // Update UI
+            document.getElementById('extractedCount').value = this.extractedValues.length;
+            this.displayExtractedValues();
+            document.getElementById('downloadBtn').disabled = false;
+            
+            this.showStatus(`Successfully extracted ${this.extractedValues.length} numerical values from PDF.`, 'success');
+            
+        } catch (error) {
+            console.error('Error processing PDF:', error);
+            this.showStatus('Error processing PDF: ' + error.message, 'error');
+        } finally {
+            this.setProcessingState(false);
         }
     }
-    
-    console.log('Extracted structured values:', extractedValues);
-    
-    // Extract values for HTML updating - we'll use the context to improve matching
-    return extractedValues.map(item => {
-        // Create a value object with additional context for better matching
-        return {
-            value: item.value,
-            type: item.type,
-            section: item.section,
-            context: item.context
-        };
-    });
-}
-
-// Helper method to identify sections in the document
-identifySections(text) {
-    const sections = {
-        'header': '',
-        'section_4a': '',
-        'section_4b': '',
-        'section_5': '',
-        'section_6a': '',
-        'section_6b': '',
-        'section_6c': '',
-        'section_7': '',
-        'section_8': '',
-        'section_9': '',
-        'section_12': '',
-        'total': ''
-    };
-    
-    // Very simple section extraction - look for section identifiers
-    if (text.includes('GSTR-1') || text.includes('GSTIN')) {
-        const headerEnd = text.indexOf('4A');
-        if (headerEnd > 0) {
-            sections.header = text.substring(0, headerEnd);
-        }
-    }
-    
-    // Extract section 4A
-    const section4AStart = text.indexOf('4A');
-    const section4BStart = text.indexOf('4B');
-    if (section4AStart > 0 && section4BStart > section4AStart) {
-        sections.section_4a = text.substring(section4AStart, section4BStart);
-    }
-    
-    // Extract section 4B
-    const section5Start = text.indexOf('5 -');
-    if (section4BStart > 0 && section5Start > section4BStart) {
-        sections.section_4b = text.substring(section4BStart, section5Start);
-    }
-    
-    // Extract other sections similarly
-    const section6AStart = text.indexOf('6A');
-    if (section5Start > 0 && section6AStart > section5Start) {
-        sections.section_5 = text.substring(section5Start, section6AStart);
-    }
-    
-    const section6BStart = text.indexOf('6B');
-    if (section6AStart > 0 && section6BStart > section6AStart) {
-        sections.section_6a = text.substring(section6AStart, section6BStart);
-    }
-    
-    const section6CStart = text.indexOf('6C');
-    if (section6BStart > 0 && section6CStart > section6BStart) {
-        sections.section_6b = text.substring(section6BStart, section6CStart);
-    }
-    
-    const section7Start = text.indexOf('7 -');
-    if (section6CStart > 0 && section7Start > section6CStart) {
-        sections.section_6c = text.substring(section6CStart, section7Start);
-    }
-    
-    const section8Start = text.indexOf('8 -');
-    if (section7Start > 0 && section8Start > section7Start) {
-        sections.section_7 = text.substring(section7Start, section8Start);
-    }
-    
-    const section9Start = text.indexOf('9');
-    if (section8Start > 0 && section9Start > section8Start) {
-        sections.section_8 = text.substring(section8Start, section9Start);
-    }
-    
-    const section12Start = text.indexOf('12 -');
-    if (section9Start > 0 && section12Start > section9Start) {
-        sections.section_9 = text.substring(section9Start, section12Start);
-    }
-    
-    const totalStart = text.indexOf('Total Liability');
-    if (section12Start > 0 && totalStart > section12Start) {
-        sections.section_12 = text.substring(section12Start, totalStart);
-    }
-    
-    if (totalStart > 0) {
-        sections.total = text.substring(totalStart);
-    }
-    
-    return sections;
-}
-
-// Helper to get text context around a match
-getTextContext(text, index, contextSize = 50) {
-    const start = Math.max(0, index - contextSize);
-    const end = Math.min(text.length, index + contextSize);
-    return text.substring(start, end);
-}
-
-updateHTMLTemplate() {
-    // Create a temporary DOM element to manipulate the HTML
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(this.htmlTemplate, 'text/html');
-    
-    // Get all value elements in the HTML
-    const valueElements = Array.from(doc.querySelectorAll('[id^="value_"]'));
-    
-    // Map extracted values to HTML elements based on intelligent matching
-    this.mapValuesToHTML(valueElements, doc);
-    
-    // Convert back to HTML string
-    this.updatedHTML = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
-}
-
-mapValuesToHTML(valueElements, doc) {
-    // Helper function to set element value
-    const setElementValue = (element, value) => {
-        if (element && value) {
-            element.textContent = value;
-        }
-    };
-
-    // 1. First, handle special identification fields
-    // GSTIN
-    const gstinValue = this.extractedValues.find(item => item.type === 'gstin');
-    if (gstinValue) {
-        setElementValue(doc.getElementById('value_1_gstin'), gstinValue.value);
-    }
-    
-    // ARN
-    const arnValue = this.extractedValues.find(item => item.type === 'arn');
-    if (arnValue) {
-        setElementValue(doc.getElementById('value_2c_arn'), arnValue.value);
-    }
-    
-    // Date
-    const dateValue = this.extractedValues.find(item => item.type === 'date');
-    if (dateValue) {
-        setElementValue(doc.getElementById('value_2d_arn_date'), dateValue.value);
-    }
-    
-    // Financial year
-    const yearValue = this.extractedValues.find(item => item.type === 'year');
-    if (yearValue) {
-        setElementValue(doc.getElementById('value_financial_year'), yearValue.value);
-    }
-    
-    // 2. Process section 4A values (we know these are important)
-    const section4AValues = this.extractedValues.filter(item => item.section === 'section_4a');
-    
-    // Find count value in section 4A
-    const section4ACount = section4AValues.find(item => 
-        item.type === 'count' && item.context.includes('records')
-    );
-    if (section4ACount) {
-        setElementValue(doc.getElementById('value_4a_records'), section4ACount.value);
-    }
-    
-    // Find monetary values in section 4A (value, taxes)
-    const section4AAmounts = section4AValues.filter(item => item.type === 'amount');
-    if (section4AAmounts.length >= 5) {
-        // Assume order: value, integrated_tax, central_tax, state_tax, cess
-        setElementValue(doc.getElementById('value_4a_value'), section4AAmounts[0].value);
-        setElementValue(doc.getElementById('value_4a_integrated_tax'), section4AAmounts[1].value);
-        setElementValue(doc.getElementById('value_4a_central_tax'), section4AAmounts[2].value);
-        setElementValue(doc.getElementById('value_4a_state_tax'), section4AAmounts[3].value);
-        setElementValue(doc.getElementById('value_4a_cess'), section4AAmounts[4].value);
-    }
-    
-    // 3. Process section 6A values (exports)
-    const section6AValues = this.extractedValues.filter(item => item.section === 'section_6a');
-    
-    // Find count value in section 6A
-    const section6ACount = section6AValues.find(item => 
-        item.type === 'count' && item.context.includes('records')
-    );
-    if (section6ACount) {
-        setElementValue(doc.getElementById('value_6a_records'), section6ACount.value);
-        setElementValue(doc.getElementById('value_6a_expwop_records'), section6ACount.value); // Same value for EXPWOP
-    }
-    
-    // Find main value in section 6A
-    const section6AAmount = section6AValues.find(item => 
-        item.type === 'amount' && !item.context.includes('tax')
-    );
-    if (section6AAmount) {
-        setElementValue(doc.getElementById('value_6a_value'), section6AAmount.value);
-        setElementValue(doc.getElementById('value_6a_expwop_value'), section6AAmount.value);
-    }
-    
-    // 4. Process section 12 and total values
-    const section12Values = this.extractedValues.filter(item => item.section === 'section_12');
-    const totalValues = this.extractedValues.filter(item => item.section === 'total');
-    
-    // Find counts and amounts in section 12
-    const section12Count = section12Values.find(item => item.type === 'count');
-    if (section12Count) {
-        setElementValue(doc.getElementById('value_12_records'), section12Count.value);
-    }
-    
-    // Find all amount values in section 12
-    const section12Amounts = section12Values.filter(item => item.type === 'amount');
-    if (section12Amounts.length >= 5) {
-        setElementValue(doc.getElementById('value_12_value'), section12Amounts[0].value);
-        setElementValue(doc.getElementById('value_12_integrated_tax'), section12Amounts[1].value);
-        setElementValue(doc.getElementById('value_12_central_tax'), section12Amounts[2].value);
-        setElementValue(doc.getElementById('value_12_state_tax'), section12Amounts[3].value);
-        setElementValue(doc.getElementById('value_12_cess'), section12Amounts[4].value);
-    }
-    
-    // Process total liability
-    const totalAmounts = totalValues.filter(item => item.type === 'amount');
-    if (totalAmounts.length >= 4) {
-        setElementValue(doc.getElementById('value_total_liability_value'), totalAmounts[0].value);
-        setElementValue(doc.getElementById('value_total_liability_integrated_tax'), totalAmounts[1].value);
-        setElementValue(doc.getElementById('value_total_liability_central_tax'), totalAmounts[2].value);
-        setElementValue(doc.getElementById('value_total_liability_state_tax'), totalAmounts[3].value);
-    }
-    
-    // Set all other fields to 0.00 if they haven't been set and are numeric fields
-    valueElements.forEach(element => {
-        if (!element.textContent && element.id.match(/_value$|_tax$|_records$|_cess$/)) {
-            if (element.id.includes('_records')) {
-                element.textContent = '0';
-            } else {
-                element.textContent = '0.00';
-            }
-        }
-    });
-}
-
-displayExtractedValues() {
-    const valuesGrid = document.getElementById('valuesGrid');
-    const previewSection = document.getElementById('previewSection');
-    
-    valuesGrid.innerHTML = '';
-    
-    // Group values by section for better display
-    const groupedValues = {};
-    this.extractedValues.forEach(item => {
-        if (!groupedValues[item.section]) {
-            groupedValues[item.section] = [];
-        }
-        groupedValues[item.section].push(item);
-    });
-    
-    // Create section headers and display values
-    for (const [section, values] of Object.entries(groupedValues)) {
-        // Create section header
-        const sectionHeader = document.createElement('div');
-        sectionHeader.className = 'section-header';
-        sectionHeader.style.gridColumn = '1 / -1';
-        sectionHeader.style.marginTop = '10px';
-        sectionHeader.style.fontWeight = 'bold';
-        sectionHeader.textContent = section.replace('_', ' ').toUpperCase();
-        valuesGrid.appendChild(sectionHeader);
-        
-        // Add values from this section
-        values.forEach((item, index) => {
-            const valueItem = document.createElement('div');
-            valueItem.className = 'value-item';
-            valueItem.textContent = `${item.type}: ${item.value}`;
-            valuesGrid.appendChild(valueItem);
-        });
-    }
-    
-    previewSection.style.display = 'block';
-}
 
     async downloadHTML() {
         if (!this.updatedHTML) {
